@@ -713,6 +713,7 @@ class SN_ScriptingBaseNode:
         if socket.bl_idname != to_idname:
             index = socket.index
             if index != -1:
+                self._clear_converted_socket_value_storage(socket)
                 # save links
                 links = []
                 for link in socket.links:
@@ -754,6 +755,22 @@ class SN_ScriptingBaseNode:
         self.disable_evaluation = False
         self._evaluate(bpy.context)
         return new
+
+    def _clear_converted_socket_value_storage(self, socket):
+        """Remove stored UI/default values that belong to the socket's old type."""
+        side = "out" if socket.is_output else "in"
+        prefix = f"_socket_{side}_{socket.index}_{socket.name}_"
+        preserved_suffixes = {"python_value"}
+
+        for key in list(self.keys()):
+            if not key.startswith(prefix):
+                continue
+
+            suffix = key[len(prefix):]
+            if suffix in preserved_suffixes:
+                continue
+
+            del self[key]
 
     socket_names = {
         "Execute": "SN_ExecuteSocket",
