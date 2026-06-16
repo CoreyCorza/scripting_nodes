@@ -19,9 +19,6 @@ class ScriptingSocket:
         if self.node.get(storage_key, False):
             return  # Already updating this socket, prevent recursion
 
-        # Set flag FIRST to prevent any recursion
-        self.node[storage_key] = True
-
         try:
             # Get current name value and store it so on_socket_name_change can access it
             # without triggering property access that might cause recursion
@@ -33,10 +30,8 @@ class ScriptingSocket:
             if hasattr(self.node, "on_socket_name_change"):
                 self.node.on_socket_name_change(self)
         finally:
-            # Always clean up the flag and stored name
+            # Always clean up the stored name
             try:
-                if storage_key in self.node:
-                    del self.node[storage_key]
                 name_storage_key = f"_socket_current_name_{id(self)}"
                 if name_storage_key in self.node:
                     del self.node[name_storage_key]
