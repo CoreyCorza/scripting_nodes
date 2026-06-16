@@ -5,6 +5,18 @@ from ...addon.variables.variables import SN_VariableProperties
 from ...utils import unique_collection_name, get_python_name
 
 
+def _run_deferred_reroute_update(node_tree_name):
+    node_tree = bpy.data.node_groups.get(node_tree_name)
+    if not node_tree or getattr(node_tree, "bl_idname", None) != "ScriptingNodesTree":
+        return None
+
+    try:
+        node_tree._update_reroutes()
+    except ReferenceError:
+        return None
+    return None
+
+
 class ScriptingNodesTree(bpy.types.NodeTree):
     bl_idname = "ScriptingNodesTree"
     bl_label = "Visual Scripting Editor"
@@ -125,7 +137,10 @@ class ScriptingNodesTree(bpy.types.NodeTree):
 
     def is_valid_link(self, link):
         """Checks if the given link is valid"""
-        # all links connected to reroutes inputs are valid
+        # Reroutes inherit their socket type from the upstream connection.
+        # Validate the final Serpens endpoints instead of the pass-through links.
+        if link.from_node.bl_idname == "NodeReroute" or link.to_node.bl_idname == "NodeReroute":
+            return True
         if not getattr(link.to_socket, "is_sn", False):
             return True
 
@@ -273,39 +288,37 @@ class ScriptingNodesTree(bpy.types.NodeTree):
         # calls a function after the links are realized
         bpy.app.timers.register(self._update_post, first_interval=0.001)
 
+    def _reroute_source_socket(self, reroute, visited=None):
+        """Return the first non-reroute socket connected upstream."""
+        if visited is None:
+            visited = set()
+        if reroute in visited or not reroute.inputs or not reroute.inputs[0].links:
+            return None
+
+        visited.add(reroute)
+        source = reroute.inputs[0].links[0].from_socket
+        if source.node.bl_idname == "NodeReroute":
+            return self._reroute_source_socket(source.node, visited)
+        return source
+
     def _update_reroutes(self):
-        """Updates all inputs and display shapes of the reroutes in this node tree"""
+        """Match reroutes to their upstream socket type using Blender's native API."""
         for reroute in self.nodes:
             if reroute.bl_idname == "NodeReroute":
-                try:
-                    connections_left = [x.from_socket for x in reroute.inputs[0].links]
-                    connections_right = [x.to_socket for x in reroute.outputs[0].links]
-                    if reroute.inputs[0].bl_idname != "SN_RerouteSocket":
-                        reroute.inputs.remove(reroute.inputs[0])
-                        reroute.outputs.remove(reroute.outputs[0])
-                        i = reroute.inputs.new("SN_RerouteSocket", "Input")
-                        o = reroute.outputs.new("SN_RerouteSocket", "Output")
-                        for c in connections_left:
-                            self.links.new(c, i)
-                        for c in connections_right:
-                            self.links.new(c, o)
-                    reroute.inputs[0].display_shape = (
-                        connections_left[0].display_shape
-                        if connections_left
-                        else "CIRCLE"
-                    )
-                    reroute.outputs[0].display_shape = (
-                        connections_left[0].display_shape
-                        if connections_left
-                        else "CIRCLE"
-                    )
-                except:
-                    pass
+                source = self._reroute_source_socket(reroute)
+                socket_idname = source.bl_idname if source else "SN_DataSocket"
+                if reroute.socket_idname != socket_idname:
+                    reroute.socket_idname = socket_idname
 
     def update(self):
         # update tree links
         self._update_tree_links()
-        self._update_reroutes()
+        # Newly inserted reroutes do not expose their realized links until the
+        # node tree update has completed.
+        node_tree_name = self.name
+        bpy.app.timers.register(
+            lambda: _run_deferred_reroute_update(node_tree_name), first_interval=0.001
+        )
 
     def reevaluate(self):
         """Reevaluates all nodes in this node tree"""
