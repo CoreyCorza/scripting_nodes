@@ -5,6 +5,18 @@ from ...addon.variables.variables import SN_VariableProperties
 from ...utils import unique_collection_name, get_python_name
 
 
+def _run_deferred_update_post(node_tree_name):
+    node_tree = bpy.data.node_groups.get(node_tree_name)
+    if not node_tree or getattr(node_tree, "bl_idname", None) != "ScriptingNodesTree":
+        return None
+
+    try:
+        node_tree._update_post()
+    except ReferenceError:
+        return None
+    return None
+
+
 class ScriptingNodesTree(bpy.types.NodeTree):
     bl_idname = "ScriptingNodesTree"
     bl_label = "Visual Scripting Editor"
@@ -270,8 +282,12 @@ class ScriptingNodesTree(bpy.types.NodeTree):
         # update cached current links
         self.link_cache[id(self)] = curr_links
 
-        # calls a function after the links are realized
-        bpy.app.timers.register(self._update_post, first_interval=0.001)
+        # Calls after links are realized. Resolve by name so paste/copybuffer
+        # timers do not retain removed NodeTree RNA pointers.
+        node_tree_name = self.name
+        bpy.app.timers.register(
+            lambda: _run_deferred_update_post(node_tree_name), first_interval=0.001
+        )
 
     def _update_reroutes(self):
         """Updates all inputs and display shapes of the reroutes in this node tree"""
