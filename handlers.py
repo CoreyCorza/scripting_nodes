@@ -932,8 +932,132 @@ def _get_legacy_socket_evidence(snapshots):
     return candidates
 
 
+def _get_migration_flag():
+    """Return True if any scene marks this file as migrated.
+
+    The flag lives on each scene's property group, but the load handler only
+    sees the active scene. Saving a file with a different active scene must
+    not make the file look unmigrated again.
+    """
+    return any(
+        scene.sn.migrated_blender_5
+        for scene in bpy.data.scenes
+        if hasattr(scene, "sn")
+    )
+
+
+def _set_migration_flag():
+    """Mark every scene as migrated so the flag survives scene switches."""
+    for scene in bpy.data.scenes:
+        if hasattr(scene, "sn"):
+            scene.sn.migrated_blender_5 = True
+
+
+def _purge_migrated_legacy_values(snapshots):
+    """Delete consumed legacy socket values from their old storage.
+
+    Old files keep the pre-5.0 socket IDProperties around even after their
+    values were copied to parent-node storage, and Blender re-saves them with
+    the file. Removing them once migration has succeeded stops them from ever
+    being mistaken for unmigrated data again. Only values that verifiably made
+    it into parent-node storage are removed.
+    """
+    purged_count = 0
+    failed_count = 0
+
+    for snapshot in snapshots:
+        node = snapshot["node"]
+        socket = snapshot["socket"]
+        for property_name, value in snapshot["value_properties"].items():
+            try:
+                storage_key = _socket_storage_key(snapshot, property_name)
+            except (AttributeError, ReferenceError, RuntimeError):
+                continue
+            if storage_key not in node or not _migration_values_equal(
+                node[storage_key], value
+            ):
+                continue
+            purged = False
+            if property_name in snapshot["direct_properties"]:
+                try:
+                    del socket[property_name]
+                    purged = True
+                except (
+                    AttributeError,
+                    KeyError,
+                    ReferenceError,
+                    RuntimeError,
+                    TypeError,
+                ):
+                    failed_count += 1
+            if property_name in snapshot["system_properties"]:
+                try:
+                    system_props = socket.bl_system_properties_get()
+                    if system_props is not None and property_name in system_props:
+                        system_props.pop(property_name)
+                        purged = True
+                except (
+                    AttributeError,
+                    KeyError,
+                    ReferenceError,
+                    RuntimeError,
+                    TypeError,
+                ):
+                    failed_count += 1
+            if purged:
+                purged_count += 1
+
+    return purged_count, failed_count
+
+
+def _has_legacy_non_socket_data():
+    """Detect legacy data outside sockets that the migration would repair.
+
+    Files created in current Serpens always name their node refs on creation
+    and initialize portal nodes, and never store names in "_name" IDProperties,
+    so none of these checks match on a fresh project.
+    """
+    for node_tree in bpy.data.node_groups:
+        if node_tree.bl_idname != "ScriptingNodesTree":
+            continue
+        for ref_collection in node_tree.node_refs:
+            for ref in ref_collection.refs:
+                if not ref.name or _get_old_property_value(ref, "_name"):
+                    return True
+        for var in node_tree.variables:
+            if _get_old_property_value(var, "_name"):
+                return True
+        for node in node_tree.nodes:
+            if (
+                node.bl_idname == "SN_PortalNode"
+                and node.get("_prev_var_name") is None
+            ):
+                return True
+
+    for scene in bpy.data.scenes:
+        if not hasattr(scene, "sn"):
+            continue
+        sn = scene.sn
+        for attribute in (
+            "property_categories",
+            "graph_categories",
+            "assets",
+            "properties",
+        ):
+            for item in getattr(sn, attribute, []):
+                if _get_old_property_value(item, "_name"):
+                    return True
+
+    return False
+
+
 def _get_blender_5_migration_status(sn):
-    """Return migration eligibility and the reason for the decision."""
+    """Return migration eligibility and the reason for the decision.
+
+    Returns a tuple of (should_migrate, reason, serpens_tree_count,
+    snapshots, legacy_candidates, mark_migrated). mark_migrated is True when
+    the file needs no migration and can silently be flagged as migrated.
+    """
     serpens_tree_count = sum(
         ntree.bl_idname == "ScriptingNodesTree" for ntree in bpy.data.node_groups
     )
@@ -947,6 +1071,7 @@ def _get_blender_5_migration_status(sn):
             serpens_tree_count,
             [],
             [],
+            False,
         )
 
     if not serpens_tree_count:
@@ -956,37 +1081,52 @@ def _get_blender_5_migration_status(sn):
             serpens_tree_count,
             [],
             [],
+            False,
+        )
+
+    # The flag is authoritative: a file migrates exactly once. Leftover legacy
+    # socket values on a migrated file are stale copies, not migration work.
+    if _get_migration_flag():
+        return (
+            False,
+            "file is already marked as migrated",
+            serpens_tree_count,
+            [],
+            [],
+            False,
         )
 
     snapshots = _snapshot_socket_migration()
     legacy_candidates = _get_legacy_socket_evidence(snapshots)
     if legacy_candidates:
-        if sn.migrated_blender_5:
-            reason = (
-                "migration flag is set but"
-                f" {len(legacy_candidates)} legacy socket values need recovery"
-            )
-        else:
-            reason = (
-                f"{len(legacy_candidates)} legacy socket values need recovery"
-            )
-        return True, reason, serpens_tree_count, snapshots, legacy_candidates
-
-    if sn.migrated_blender_5:
         return (
-            False,
-            "migration flag is set and no legacy socket values need recovery",
+            True,
+            f"{len(legacy_candidates)} legacy socket values need recovery",
             serpens_tree_count,
             snapshots,
             legacy_candidates,
+            False,
         )
 
+    if _has_legacy_non_socket_data():
+        return (
+            True,
+            "unmarked Serpens project with legacy data detected",
+            serpens_tree_count,
+            snapshots,
+            legacy_candidates,
+            False,
+        )
+
+    # Nothing legacy anywhere: this is a project created in current Serpens.
+    # Flag it silently so future loads skip the scan without any console output.
     return (
-        True,
-        "unmarked Serpens project detected",
+        False,
+        "no legacy data found",
         serpens_tree_count,
         snapshots,
         legacy_candidates,
+        True,
     )
 
 
@@ -1007,18 +1147,23 @@ def load_handler(dummy):
             serpens_tree_count,
             socket_snapshots,
             legacy_candidates,
+            mark_migrated,
         ) = _get_blender_5_migration_status(sn)
+        if mark_migrated:
+            _set_migration_flag()
         unavailable_custom_nodes = _get_unavailable_custom_nodes()
         if bpy.data.filepath:
-            print(
-                "Serpens: Migration check:"
-                f" filepath={bpy.data.filepath!r},"
-                f" scene={bpy.context.scene.name!r},"
-                f" trees={serpens_tree_count},"
-                f" migrated_flag={sn.migrated_blender_5!r},"
-                f" recovery_candidates={len(legacy_candidates)},"
-                f" decision={migration_reason}"
-            )
+            # Files that need no migration load without migration output.
+            if should_migrate:
+                print(
+                    "Serpens: Migration check:"
+                    f" filepath={bpy.data.filepath!r},"
+                    f" scene={bpy.context.scene.name!r},"
+                    f" trees={serpens_tree_count},"
+                    f" migrated_flag={_get_migration_flag()!r},"
+                    f" recovery_candidates={len(legacy_candidates)},"
+                    f" decision={migration_reason}"
+                )
             _print_unavailable_custom_nodes(unavailable_custom_nodes)
 
         # Only migrate a loaded Serpens project, never Blender's startup scene.
@@ -1048,13 +1193,27 @@ def load_handler(dummy):
                     + socket_report["validation_failures"]
                     + post_cleanup_failures
                 )
+                purged_count, purge_failures = _purge_migrated_legacy_values(
+                    socket_snapshots
+                )
+                if purged_count or purge_failures:
+                    print(
+                        "Serpens: Cleared"
+                        f" {purged_count} consumed legacy socket values"
+                        f" ({purge_failures} could not be cleared)"
+                    )
+                # Mark the file even when validation reported warnings:
+                # migration is deterministic, so re-running it on the next
+                # load cannot do better and would just loop forever.
+                _set_migration_flag()
                 if migration_failures:
                     print(
-                        "Serpens: Migration did not validate;"
-                        " the file has not been marked as migrated"
+                        "Serpens: Migration completed with"
+                        f" {len(migration_failures)} warnings (printed above);"
+                        " the file is marked as migrated and will not be"
+                        " migrated again"
                     )
                 else:
-                    sn.migrated_blender_5 = True
                     print("Serpens: Migration complete and validated")
                 migration_ready_for_finalization = True
             finally:
