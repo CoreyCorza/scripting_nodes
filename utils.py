@@ -27,6 +27,29 @@ def collection_get_item(collection, name):
     return None
 
 
+def get_pasted_operator_rna(node, pasted_operator):
+    """Resolve a pasted operator string like 'bpy.ops.mesh.subdivide()' to its RNA type.
+
+    Returns None and prints a warning naming the node when the operator is not
+    registered. Pasted references to compiled Serpens operators only resolve
+    while the compiled addon is registered and break permanently when the
+    source Operator node's uid changes, so a failed lookup must never crash
+    node evaluation.
+    """
+    op_path = pasted_operator.split("(")[0]
+    try:
+        return eval(op_path).get_rna_type()
+    except Exception:
+        tree = getattr(node, "node_tree", None)
+        tree_name = f" in tree '{tree.name}'" if tree else ""
+        print(
+            f"Serpens Warning: node '{node.name}'{tree_name} references the"
+            f" unknown operator '{op_path.replace('bpy.ops.', '')}'."
+            " Re-paste the operator or use a custom operator node reference."
+        )
+        return None
+
+
 def get_python_name(name, replacement="", separator="_", lower=True):
     """ Returns the given name as a valid python represention to use as variable names in scripts """
     # format string

@@ -1,6 +1,7 @@
 import bpy
 from ..Program.Run_Operator import on_operator_ref_update
 from ..base_node import SN_ScriptingBaseNode
+from ...utils import get_pasted_operator_rna
 
 
 class SN_ButtonNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
@@ -111,10 +112,10 @@ class SN_ButtonNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
     def update_pasted_operator(self, context):
         self.reset_inputs()
 
-        op = eval(self.pasted_operator.split("(")[0])
-        op_rna = op.get_rna_type()
-        self.pasted_name = op_rna.name
-        self.create_inputs(op_rna)
+        op_rna = get_pasted_operator_rna(self, self.pasted_operator)
+        if op_rna:
+            self.pasted_name = op_rna.name
+            self.create_inputs(op_rna)
         self._evaluate(context)
 
     pasted_operator: bpy.props.StringProperty(
@@ -138,26 +139,32 @@ class SN_ButtonNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
     def evaluate(self, context):
         if self.source_type == "BLENDER":
             op_name = self.pasted_operator[8:].split("(")[0]
-            code = f"op = {self.active_layout}.operator('{op_name}', text={self.inputs['Label'].python_value}, icon_value={self.inputs['Icon'].python_value}, emboss={self.inputs['Emboss'].python_value}, depress={self.inputs['Depress'].python_value})"
+            op_rna = get_pasted_operator_rna(self, self.pasted_operator)
+            if op_rna is None:
+                # Draw a placeholder button so the interface stays intact
+                code = f"op = {self.active_layout}.operator('sn.dummy_button_operator', text={self.inputs['Label'].python_value}, icon_value={self.inputs['Icon'].python_value}, emboss={self.inputs['Emboss'].python_value}, depress={self.inputs['Depress'].python_value})"
+            else:
+                code = f"op = {self.active_layout}.operator('{op_name}', text={self.inputs['Label'].python_value}, icon_value={self.inputs['Icon'].python_value}, emboss={self.inputs['Emboss'].python_value}, depress={self.inputs['Depress'].python_value})"
 
-            op = eval(self.pasted_operator.split("(")[0])
-            op_rna = op.get_rna_type()
-            for inp in self.inputs:
-                if inp.can_be_disabled and not inp.disabled:
-                    for prop in op_rna.properties:
-                        if (
-                            self.version == 0
-                            and (prop.name and prop.name == inp.name)
-                            or (
-                                not prop.name
-                                and prop.identifier.replace("_", " ").title()
-                                == inp.name
-                            )
-                        ) or (
-                            self.version == 1
-                            and inp.name.replace(" ", "_").lower() == prop.identifier
-                        ):
-                            code += "\n" + f"op.{prop.identifier} = {inp.python_value}"
+                for inp in self.inputs:
+                    if inp.can_be_disabled and not inp.disabled:
+                        for prop in op_rna.properties:
+                            if (
+                                self.version == 0
+                                and (prop.name and prop.name == inp.name)
+                                or (
+                                    not prop.name
+                                    and prop.identifier.replace("_", " ").title()
+                                    == inp.name
+                                )
+                            ) or (
+                                self.version == 1
+                                and inp.name.replace(" ", "_").lower()
+                                == prop.identifier
+                            ):
+                                code += (
+                                    "\n" + f"op.{prop.identifier} = {inp.python_value}"
+                                )
             self.code = f"""
                         {self.indent(code, 6)}
                         {self.indent(self.outputs[0].python_value, 6)}
