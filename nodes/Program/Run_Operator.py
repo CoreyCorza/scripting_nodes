@@ -1,6 +1,6 @@
 import bpy
 from ..base_node import SN_ScriptingBaseNode
-from ...utils import collection_has_item
+from ...utils import collection_has_item, get_pasted_operator_rna
 
 
 def on_operator_ref_update(self, node, data, ntree, node_ref_name, input_offset=1):
@@ -207,12 +207,12 @@ class SN_RunOperatorNode(SN_ScriptingBaseNode, bpy.types.Node):
         self.reset_inputs()
 
         if self.pasted_operator:
-            self.disable_evaluation = True
-            op = eval(self.pasted_operator.split("(")[0])
-            op_rna = op.get_rna_type()
-            self.pasted_name = op_rna.name
-            self.create_inputs(op_rna)
-            self.disable_evaluation = False
+            op_rna = get_pasted_operator_rna(self, self.pasted_operator)
+            if op_rna:
+                self.disable_evaluation = True
+                self.pasted_name = op_rna.name
+                self.create_inputs(op_rna)
+                self.disable_evaluation = False
             self._evaluate(context)
 
     pasted_operator: bpy.props.StringProperty(
@@ -255,8 +255,14 @@ class SN_RunOperatorNode(SN_ScriptingBaseNode, bpy.types.Node):
         invoke = "" if not self.use_invoke else "'INVOKE_DEFAULT', "
         if self.source_type == "BLENDER":
             op_name = self.pasted_operator[8:].split("(")[0]
-            op = eval(self.pasted_operator.split("(")[0])
-            op_rna = op.get_rna_type()
+            op_rna = get_pasted_operator_rna(self, self.pasted_operator)
+            if op_rna is None:
+                # Keep the rest of the program chain running without the call
+                self.code = f"""
+                            pass # Serpens: unknown operator 'bpy.ops.{op_name}' skipped
+                            {self.indent(self.outputs[0].python_value, 7)}
+                            """
+                return
             parameters = ""
             for inp in self.inputs[1:]:
                 if not inp.disabled:

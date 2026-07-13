@@ -1,6 +1,7 @@
 import bpy
 from ..base_node import SN_ScriptingBaseNode
 from ..Program.Run_Operator import on_operator_ref_update
+from ...utils import get_pasted_operator_rna
 
 
 space_names = {
@@ -237,9 +238,9 @@ class SN_OnKeypressNode(SN_ScriptingBaseNode, bpy.types.Node):
         self.inputs.clear()
 
         if self.pasted_operator:
-            op = eval(self.pasted_operator.split("(")[0])
-            op_rna = op.get_rna_type()
-            self.create_inputs(op_rna)
+            op_rna = get_pasted_operator_rna(self, self.pasted_operator)
+            if op_rna:
+                self.create_inputs(op_rna)
         self._evaluate(context)
 
     pasted_operator: bpy.props.StringProperty(
@@ -373,36 +374,38 @@ class SN_OnKeypressNode(SN_ScriptingBaseNode, bpy.types.Node):
                     input_code = f"kmi.properties.name = '{node.idname}'\n"
             elif self.action == "OPERATOR":
                 if self.parent_type == "BLENDER" and self.pasted_operator:
-                    if not self.pasted_operator:
-                        return
-                    operator = self.pasted_operator.split("(")[0].replace(
-                        "bpy.ops.", ""
-                    )
-                    op = eval(self.pasted_operator.split("(")[0])
-                    op_rna = op.get_rna_type()
-                    for inp in self.inputs:
-                        if not inp.disabled:
-                            for prop in op_rna.properties:
-                                if (
-                                    self.version == 0
-                                    and (prop.name and prop.name == inp.name)
-                                    or (
-                                        not prop.name
-                                        and prop.identifier.replace("_", " ").title()
-                                        == inp.name
-                                    )
-                                ) or (
-                                    self.version == 1
-                                    and (
-                                        inp.name.replace(" ", "_").lower()
-                                        == prop.identifier
-                                    )
-                                ):
-                                    self.code += (
-                                        "\n"
-                                        + f"op.{prop.identifier} = {inp.python_value}"
-                                    )
-                                    input_code += f"kmi.properties.{prop.identifier} = {inp.python_value}\n"
+                    # An unresolvable operator leaves this empty so the
+                    # shortcut is skipped instead of crashing evaluation
+                    op_rna = get_pasted_operator_rna(self, self.pasted_operator)
+                    if op_rna is not None:
+                        operator = self.pasted_operator.split("(")[0].replace(
+                            "bpy.ops.", ""
+                        )
+                        for inp in self.inputs:
+                            if not inp.disabled:
+                                for prop in op_rna.properties:
+                                    if (
+                                        self.version == 0
+                                        and (prop.name and prop.name == inp.name)
+                                        or (
+                                            not prop.name
+                                            and prop.identifier.replace(
+                                                "_", " "
+                                            ).title()
+                                            == inp.name
+                                        )
+                                    ) or (
+                                        self.version == 1
+                                        and (
+                                            inp.name.replace(" ", "_").lower()
+                                            == prop.identifier
+                                        )
+                                    ):
+                                        self.code += (
+                                            "\n"
+                                            + f"op.{prop.identifier} = {inp.python_value}"
+                                        )
+                                        input_code += f"kmi.properties.{prop.identifier} = {inp.python_value}\n"
                 elif (
                     self.parent_type == "CUSTOM"
                     and self.ref_ntree
