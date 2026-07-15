@@ -303,6 +303,14 @@ class ScriptingNodesTree(bpy.types.NodeTree):
                     pass
 
     def update(self):
+        # Library-linked trees are read-only mirrors and must never run the
+        # Serpens update machinery. Blender also calls update() mid link and
+        # append (before appended ids are made local), when the tree's
+        # topology caches are not safe to touch, and running it there would
+        # fill link_cache with socket references that dangle once temporarily
+        # linked trees are removed again.
+        if self.library:
+            return
         # update tree links
         self._update_tree_links()
         self._update_reroutes()

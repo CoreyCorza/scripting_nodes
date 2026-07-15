@@ -4,7 +4,107 @@ import os
 
 from ...interface.panels.graph_ui_list import get_selected_graph, get_selected_graph_offset
 from ...nodes.compiler import unregister_addon, compile_addon
+from ...utils import collection_has_item
+from .node_tree import ScriptingNodesTree
 
+
+
+def _remove_temporarily_linked_ids(collection, previous):
+    """Remove datablocks that a temporary library link pulled in.
+
+    Removing a library also frees every id linked from it, and a file can
+    pull in further libraries indirectly, so wrappers in the diff may already
+    be dead by the time they are removed.
+    """
+    for item in set(collection.values()) - previous:
+        try:
+            collection.remove(item)
+        except (ReferenceError, RuntimeError):
+            pass
+
+
+def append_missing_properties(context, path):
+    """Copy Serpens property definitions from another file into this scene.
+
+    Appended graphs reference addon properties by name, but property
+    definitions live on the source file's scenes, not on the node tree, so
+    they don't come along with the appended datablock. This temporarily links
+    the source scenes, copies any property definitions (and their categories)
+    that don't exist here yet, and unlinks everything again. Properties that
+    already exist by name are kept as they are so appended nodes bind to them.
+    """
+    sn = context.scene.sn
+    copied = []
+
+    prev_scenes = set(bpy.data.scenes.values())
+    prev_libraries = set(bpy.data.libraries.values())
+    try:
+        with bpy.data.libraries.load(path, link=True) as (data_from, data_to):
+            data_to.scenes = list(data_from.scenes)
+    except (OSError, RuntimeError) as error:
+        print(
+            "Serpens Warning: could not read properties from"
+            f" '{path}': {error}"
+        )
+        return copied
+
+    try:
+        for scene in bpy.data.scenes:
+            if scene in prev_scenes or not hasattr(scene, "sn"):
+                continue
+            for prop in scene.sn.properties:
+                if not prop.name or collection_has_item(sn.properties, prop.name):
+                    continue
+                if prop.category and not collection_has_item(
+                    sn.property_categories, prop.category
+                ):
+                    if prop.category != "OTHER":
+                        sn.property_categories.add().name = prop.category
+                new_prop = sn.properties.add()
+                prop.match_settings(new_prop)
+                new_prop.attach_to = prop.attach_to
+                copied.append(new_prop.name)
+    finally:
+        # remove everything the temporary link pulled in
+        _remove_temporarily_linked_ids(bpy.data.libraries, prev_libraries)
+        _remove_temporarily_linked_ids(bpy.data.scenes, prev_scenes)
+
+    return copied
+
+
+def get_serpens_graphs_in_file(path):
+    """Return the names of the Serpens node trees in the given blend file.
+
+    A library load only exposes datablock names, not their types, so the
+    file's node groups are linked temporarily to check their bl_idname and
+    unlinked again right away.
+    """
+    graphs = []
+    prev_groups = set(bpy.data.node_groups.values())
+    prev_libraries = set(bpy.data.libraries.values())
+    try:
+        with bpy.data.libraries.load(path, link=True) as (data_from, data_to):
+            data_to.node_groups = list(data_from.node_groups)
+    except (OSError, RuntimeError) as error:
+        print(
+            "Serpens Warning: could not read node trees from"
+            f" '{path}': {error}"
+        )
+        return graphs
+
+    try:
+        for group in bpy.data.node_groups:
+            if group not in prev_groups and group.bl_idname == "ScriptingNodesTree":
+                graphs.append(group.name)
+    finally:
+        # drop any cached link data for the trees that are about to go away
+        # so a later tree at a recycled id can't pick up dangling sockets
+        for group in set(bpy.data.node_groups.values()) - prev_groups:
+            ScriptingNodesTree.link_cache.pop(id(group), None)
+        _remove_temporarily_linked_ids(bpy.data.libraries, prev_libraries)
+        _remove_temporarily_linked_ids(bpy.data.node_groups, prev_groups)
+
+    return graphs
 
 
 def get_serpens_graphs():
@@ -113,55 +213,102 @@ class SN_OT_AppendGraph(bpy.types.Operator, ImportHelper):
 
 
 
+class SN_AppendGraphItem(bpy.types.PropertyGroup):
+    """A node tree offered for appending in the append popup"""
+
+    selected: bpy.props.BoolProperty(
+        default=False,
+        name="Append",
+        description="Append this node tree",
+    )
+
+
 class SN_OT_AppendPopup(bpy.types.Operator):
     bl_idname = "sn.append_popup"
-    bl_label = "Append Node Tree"
-    bl_description = "Appends this node tree from the addon"
+    bl_label = "Append Node Trees"
+    bl_description = "Appends the selected node trees from this file"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
-
-    def get_graph_items(self, context):
-        """ Returns all node trees that can be found in the selected file """
-        items = []
-        with bpy.data.libraries.load(self.path) as (data_from, _):
-            for group in data_from.node_groups:
-                items.append((group, group, group))
-        if not items:
-            items = [("NONE", "NONE", "NONE")]
-        return items
 
     path: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
 
-    graph: bpy.props.EnumProperty(name="Node Tree",
-                                   description="Node Tree to import",
-                                   items=get_graph_items,
-                                   options={"HIDDEN", "SKIP_SAVE"})
+    graphs: bpy.props.CollectionProperty(
+        type=SN_AppendGraphItem, options={"HIDDEN", "SKIP_SAVE"}
+    )
+
+    def _get_open_editor_trees(self, context):
+        """Collect the tree currently shown in each Serpens node editor"""
+        open_trees = []
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type != "NODE_EDITOR":
+                    continue
+                for space in area.spaces:
+                    if (
+                        space.type == "NODE_EDITOR"
+                        and getattr(space, "tree_type", None) == "ScriptingNodesTree"
+                    ):
+                        open_trees.append((space, space.node_tree))
+        return open_trees
+
+    def _restore_open_editor_trees(self, open_trees):
+        """Reactivate the trees the user had open before the append"""
+        for space, tree in open_trees:
+            try:
+                if tree and space.node_tree != tree:
+                    space.node_tree = tree
+            except (ReferenceError, RuntimeError):
+                pass
 
     def execute(self, context):
-        if self.graph != "NONE":
+        selected = [item.name for item in self.graphs if item.selected]
+        if selected:
+            # remember which trees are open so the append can't blank them
+            open_editor_trees = self._get_open_editor_trees(context)
+
             # save previous groups
             prev_groups = bpy.data.node_groups.values()
 
-            # append node group
+            # append the selected node groups
             with bpy.data.libraries.load(self.path) as (_, data_to):
-                data_to.node_groups = [self.graph]
-            
-            # register new graph
+                data_to.node_groups = selected
+
+            # bring the property definitions the graphs reference with them
+            copied_props = append_missing_properties(context, self.path)
+            if copied_props:
+                self.report(
+                    {"INFO"},
+                    message=f"Appended {len(copied_props)} properties:"
+                    f" {', '.join(copied_props)}",
+                )
+
+            # register new graphs
             new_groups = set(prev_groups) ^ set(bpy.data.node_groups.values())
             for group in new_groups:
                 context.scene.sn.node_tree_index = bpy.data.node_groups.values().index(group)
             compile_addon()
-            
+
+            # bring back the trees the user had open in the node editors
+            self._restore_open_editor_trees(open_editor_trees)
+
             # redraw screen
             context.area.tag_redraw()
+        elif len(self.graphs):
+            self.report({"INFO"}, message="No node trees selected to append")
         return {"FINISHED"}
     
     def draw(self, context):
-        if self.graph == "NONE":
-            self.layout.label(text="No Node Trees found in this blend file",icon="ERROR")
+        if not len(self.graphs):
+            self.layout.label(text="No Serpens node trees found in this blend file",icon="ERROR")
         else:
-            self.layout.prop(self, "graph", text="Node Tree")
+            self.layout.label(text="Select the node trees to append:")
+            col = self.layout.column(align=True)
+            for item in self.graphs:
+                col.prop(item, "selected", text=item.name)
 
     def invoke(self, context, event):
+        self.graphs.clear()
+        for name in get_serpens_graphs_in_file(self.path):
+            self.graphs.add().name = name
         return context.window_manager.invoke_props_dialog(self)
 
 
