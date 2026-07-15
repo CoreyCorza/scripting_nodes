@@ -107,6 +107,27 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         update=SN_ScriptingBaseNode._evaluate,
     )
 
+    panel_icon: bpy.props.IntProperty(
+        default=0,
+        min=0,
+        name="Header Icon",
+        description="Icon shown in this panels header (only displayed in Blender 5.2+)",
+        update=SN_ScriptingBaseNode._evaluate,
+    )
+
+    def _get_panel_icon_name(self):
+        """Return the identifier of the selected built-in icon or an empty string"""
+        if self.panel_icon:
+            icons = (
+                bpy.types.UILayout.bl_rna.functions["prop"]
+                .parameters["icon"]
+                .enum_items
+            )
+            for icon in icons:
+                if icon.value == self.panel_icon:
+                    return icon.identifier
+        return ""
+
     expand_header: bpy.props.BoolProperty(
         default=False,
         name="Expand Header",
@@ -222,6 +243,20 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                 parent_node = self.ref_ntree.nodes[self.ref_SN_PanelNode]
                 parent = parent_node.last_idname
 
+        # bl_icon only exists in Blender 5.2+; guard it inside the class body
+        # so the compiled addon keeps working on older versions
+        icon_line = ""
+        if self.panel_icon:
+            icon_name = self._get_panel_icon_name()
+            if icon_name:
+                icon_line = (
+                    f"if bpy.app.version >= (5, 2, 0): bl_icon = '{icon_name}'"
+                )
+            else:
+                icon_line = (
+                    f"if bpy.app.version >= (5, 2, 0): bl_icon_value = {self.panel_icon}"
+                )
+
         self.code = f"""
                     class {self.last_idname}(bpy.types.Panel):
                         bl_label = '{self.panel_label}'
@@ -234,6 +269,7 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                         {f"bl_options = {{{', '.join(options)}}}" if options else ""}
                         {f"bl_parent_id = '{parent}'" if self.is_subpanel and parent else ""}
                         bl_ui_units_x={self.panel_width}
+                        {icon_line}
 
                         @classmethod
                         def poll(cls, context):
@@ -358,6 +394,19 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
             layout.prop(self, "hide_header")
             layout.prop(self, "expand_header")
             layout.prop(self, "default_closed")
+
+            if not self.hide_header:
+                op = layout.operator(
+                    "sn.select_icon",
+                    text="Header Icon" if not self.panel_icon else "",
+                    icon_value=self.panel_icon,
+                )
+                op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
+                op.prop_name = "panel_icon"
+                if self.panel_icon and bpy.app.version < (5, 2, 0):
+                    row = layout.row()
+                    row.enabled = False
+                    row.label(text="Header icons show in Blender 5.2+", icon="INFO")
         layout.prop(self, "shortcut_only")
 
     def draw_node_panel(self, context, layout):
