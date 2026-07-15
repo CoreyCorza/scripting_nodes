@@ -465,6 +465,8 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                         op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
                         op.prop_name = "panel_icon"
                     else:
+                        row.alignment = 'EXPAND'
+                        row.scale_x = 2.0
                         row.prop_search(
                             self,
                             "panel_icon_asset",
