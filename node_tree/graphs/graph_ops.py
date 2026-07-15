@@ -8,6 +8,20 @@ from ...utils import collection_has_item
 
 
 
+def _remove_temporarily_linked_ids(collection, previous):
+    """Remove datablocks that a temporary library link pulled in.
+
+    Removing a library also frees every id linked from it, and a file can
+    pull in further libraries indirectly, so wrappers in the diff may already
+    be dead by the time they are removed.
+    """
+    for item in set(collection.values()) - previous:
+        try:
+            collection.remove(item)
+        except (ReferenceError, RuntimeError):
+            pass
+
+
 def append_missing_properties(context, path):
     """Copy Serpens property definitions from another file into this scene.
 
@@ -51,15 +65,41 @@ def append_missing_properties(context, path):
                 copied.append(new_prop.name)
     finally:
         # remove everything the temporary link pulled in
-        for library in set(bpy.data.libraries.values()) - prev_libraries:
-            bpy.data.libraries.remove(library)
-        for scene in set(bpy.data.scenes.values()) - prev_scenes:
-            try:
-                bpy.data.scenes.remove(scene)
-            except RuntimeError:
-                pass
+        _remove_temporarily_linked_ids(bpy.data.libraries, prev_libraries)
+        _remove_temporarily_linked_ids(bpy.data.scenes, prev_scenes)
 
     return copied
+
+
+def get_serpens_graphs_in_file(path):
+    """Return the names of the Serpens node trees in the given blend file.
+
+    A library load only exposes datablock names, not their types, so the
+    file's node groups are linked temporarily to check their bl_idname and
+    unlinked again right away.
+    """
+    graphs = []
+    prev_groups = set(bpy.data.node_groups.values())
+    prev_libraries = set(bpy.data.libraries.values())
+    try:
+        with bpy.data.libraries.load(path, link=True) as (data_from, data_to):
+            data_to.node_groups = list(data_from.node_groups)
+    except (OSError, RuntimeError) as error:
+        print(
+            "Serpens Warning: could not read node trees from"
+            f" '{path}': {error}"
+        )
+        return graphs
+
+    try:
+        for group in bpy.data.node_groups:
+            if group not in prev_groups and group.bl_idname == "ScriptingNodesTree":
+                graphs.append(group.name)
+    finally:
+        _remove_temporarily_linked_ids(bpy.data.libraries, prev_libraries)
+        _remove_temporarily_linked_ids(bpy.data.node_groups, prev_groups)
+
+    return graphs
 
 
 def get_serpens_graphs():
@@ -174,15 +214,12 @@ class SN_OT_AppendPopup(bpy.types.Operator):
     bl_description = "Appends this node tree from the addon"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
 
+    # cached on invoke; also keeps the enum item strings referenced
+    graph_items = [("NONE", "NONE", "NONE")]
+
     def get_graph_items(self, context):
-        """ Returns all node trees that can be found in the selected file """
-        items = []
-        with bpy.data.libraries.load(self.path) as (data_from, _):
-            for group in data_from.node_groups:
-                items.append((group, group, group))
-        if not items:
-            items = [("NONE", "NONE", "NONE")]
-        return items
+        """ Returns the Serpens node trees found in the selected file """
+        return SN_OT_AppendPopup.graph_items
 
     path: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
 
@@ -221,11 +258,15 @@ class SN_OT_AppendPopup(bpy.types.Operator):
     
     def draw(self, context):
         if self.graph == "NONE":
-            self.layout.label(text="No Node Trees found in this blend file",icon="ERROR")
+            self.layout.label(text="No Serpens node trees found in this blend file",icon="ERROR")
         else:
             self.layout.prop(self, "graph", text="Node Tree")
 
     def invoke(self, context, event):
+        graphs = get_serpens_graphs_in_file(self.path)
+        SN_OT_AppendPopup.graph_items = [
+            (name, name, name) for name in graphs
+        ] or [("NONE", "NONE", "NONE")]
         return context.window_manager.invoke_props_dialog(self)
 
 
