@@ -213,25 +213,27 @@ class SN_OT_AppendGraph(bpy.types.Operator, ImportHelper):
 
 
 
+class SN_AppendGraphItem(bpy.types.PropertyGroup):
+    """A node tree offered for appending in the append popup"""
+
+    selected: bpy.props.BoolProperty(
+        default=False,
+        name="Append",
+        description="Append this node tree",
+    )
+
+
 class SN_OT_AppendPopup(bpy.types.Operator):
     bl_idname = "sn.append_popup"
-    bl_label = "Append Node Tree"
-    bl_description = "Appends this node tree from the addon"
+    bl_label = "Append Node Trees"
+    bl_description = "Appends the selected node trees from this file"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
-
-    # cached on invoke; also keeps the enum item strings referenced
-    graph_items = [("NONE", "NONE", "NONE")]
-
-    def get_graph_items(self, context):
-        """ Returns the Serpens node trees found in the selected file """
-        return SN_OT_AppendPopup.graph_items
 
     path: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
 
-    graph: bpy.props.EnumProperty(name="Node Tree",
-                                   description="Node Tree to import",
-                                   items=get_graph_items,
-                                   options={"HIDDEN", "SKIP_SAVE"})
+    graphs: bpy.props.CollectionProperty(
+        type=SN_AppendGraphItem, options={"HIDDEN", "SKIP_SAVE"}
+    )
 
     def _get_open_editor_trees(self, context):
         """Collect the tree currently shown in each Serpens node editor"""
@@ -258,18 +260,19 @@ class SN_OT_AppendPopup(bpy.types.Operator):
                 pass
 
     def execute(self, context):
-        if self.graph != "NONE":
+        selected = [item.name for item in self.graphs if item.selected]
+        if selected:
             # remember which trees are open so the append can't blank them
             open_editor_trees = self._get_open_editor_trees(context)
 
             # save previous groups
             prev_groups = bpy.data.node_groups.values()
 
-            # append node group
+            # append the selected node groups
             with bpy.data.libraries.load(self.path) as (_, data_to):
-                data_to.node_groups = [self.graph]
-            
-            # bring the property definitions the graph references with it
+                data_to.node_groups = selected
+
+            # bring the property definitions the graphs reference with them
             copied_props = append_missing_properties(context, self.path)
             if copied_props:
                 self.report(
@@ -278,7 +281,7 @@ class SN_OT_AppendPopup(bpy.types.Operator):
                     f" {', '.join(copied_props)}",
                 )
 
-            # register new graph
+            # register new graphs
             new_groups = set(prev_groups) ^ set(bpy.data.node_groups.values())
             for group in new_groups:
                 context.scene.sn.node_tree_index = bpy.data.node_groups.values().index(group)
@@ -289,19 +292,23 @@ class SN_OT_AppendPopup(bpy.types.Operator):
 
             # redraw screen
             context.area.tag_redraw()
+        elif len(self.graphs):
+            self.report({"INFO"}, message="No node trees selected to append")
         return {"FINISHED"}
     
     def draw(self, context):
-        if self.graph == "NONE":
+        if not len(self.graphs):
             self.layout.label(text="No Serpens node trees found in this blend file",icon="ERROR")
         else:
-            self.layout.prop(self, "graph", text="Node Tree")
+            self.layout.label(text="Select the node trees to append:")
+            col = self.layout.column(align=True)
+            for item in self.graphs:
+                col.prop(item, "selected", text=item.name)
 
     def invoke(self, context, event):
-        graphs = get_serpens_graphs_in_file(self.path)
-        SN_OT_AppendPopup.graph_items = [
-            (name, name, name) for name in graphs
-        ] or [("NONE", "NONE", "NONE")]
+        self.graphs.clear()
+        for name in get_serpens_graphs_in_file(self.path):
+            self.graphs.add().name = name
         return context.window_manager.invoke_props_dialog(self)
 
 
