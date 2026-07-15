@@ -1,4 +1,5 @@
 import bpy
+import os
 from ...base_node import SN_ScriptingBaseNode
 from ....utils import get_python_name
 
@@ -106,6 +107,70 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         description="Hide the panels header",
         update=SN_ScriptingBaseNode._evaluate,
     )
+
+    # Only the icon identifier is stored since icon values shift between
+    # Blender versions when icons are added. The int property below is just a
+    # computed view over it so the icon gallery picker can read and write it.
+    panel_icon_name: bpy.props.StringProperty(
+        default="MONKEY",
+        name="Tab Icon Name",
+        description="Identifier of the icon shown on this panels sidebar tab",
+    )
+
+    def _icon_enum_items(self):
+        return (
+            bpy.types.UILayout.bl_rna.functions["prop"]
+            .parameters["icon"]
+            .enum_items
+        )
+
+    def _get_panel_icon(self):
+        if self.panel_icon_name:
+            for icon in self._icon_enum_items():
+                if icon.identifier == self.panel_icon_name:
+                    return icon.value
+        return 0
+
+    def _set_panel_icon(self, value):
+        name = ""
+        if value:
+            for icon in self._icon_enum_items():
+                if icon.value == value:
+                    name = icon.identifier
+                    break
+        self.panel_icon_name = name
+
+    panel_icon: bpy.props.IntProperty(
+        name="Tab Icon",
+        description="Icon shown on this panels sidebar tab (only displayed in Blender 5.2+)",
+        get=_get_panel_icon,
+        set=_set_panel_icon,
+        update=SN_ScriptingBaseNode._evaluate,
+    )
+
+    panel_icon_source: bpy.props.EnumProperty(
+        name="Tab Icon Source",
+        description="Use a builtin blender icon or a custom image asset for the sidebar tab",
+        items=[
+            ("BLENDER", "Blender", "Use a builtin blender icon", "BLENDER", 0),
+            ("CUSTOM", "Asset", "Use an image asset", "ASSET_MANAGER", 1),
+        ],
+        update=SN_ScriptingBaseNode._evaluate,
+    )
+
+    panel_icon_asset: bpy.props.StringProperty(
+        name="Tab Icon Asset",
+        description="The image asset shown on this panels sidebar tab",
+        update=SN_ScriptingBaseNode._evaluate,
+    )
+
+    def _get_panel_icon_asset_path(self, context):
+        """Return the selected icon asset's path or an empty string"""
+        if self.panel_icon_asset:
+            for asset in context.scene.sn.assets:
+                if asset.name == self.panel_icon_asset:
+                    return asset.path
+        return ""
 
     expand_header: bpy.props.BoolProperty(
         default=False,
@@ -222,6 +287,30 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                 parent_node = self.ref_ntree.nodes[self.ref_SN_PanelNode]
                 parent = parent_node.last_idname
 
+        # bl_icon and bl_icon_value only exist in Blender 5.2+; guard them so
+        # the compiled addon keeps working on older versions. Custom images
+        # assign bl_icon_value right before registration since class bodies
+        # run before the previews are loaded.
+        icon_line = ""
+        icon_register_lines = []
+        if not self.is_subpanel:
+            if self.panel_icon_source == "BLENDER":
+                if self.panel_icon_name:
+                    icon_line = f"if bpy.app.version >= (5, 2, 0): bl_icon = '{self.panel_icon_name}'"
+            else:
+                asset_path = self._get_panel_icon_asset_path(context)
+                if asset_path:
+                    # exported addons ship their assets in the assets folder
+                    if context.scene.sn.is_exporting:
+                        path_expr = f"os.path.join(os.path.dirname(__file__), 'assets', '{os.path.basename(asset_path)}')"
+                    else:
+                        path_expr = f"r'{asset_path}'"
+                    self.code_import = "import os"
+                    icon_register_lines = [
+                        f"if bpy.app.version >= (5, 2, 0) and os.path.exists({path_expr}) and not {path_expr} in _icons: _icons.load({path_expr}, {path_expr}, 'IMAGE')",
+                        f"if bpy.app.version >= (5, 2, 0) and {path_expr} in _icons: {self.last_idname}.bl_icon_value = _icons[{path_expr}].icon_id",
+                    ]
+
         self.code = f"""
                     class {self.last_idname}(bpy.types.Panel):
                         bl_label = '{self.panel_label}'
@@ -234,6 +323,7 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                         {f"bl_options = {{{', '.join(options)}}}" if options else ""}
                         {f"bl_parent_id = '{parent}'" if self.is_subpanel and parent else ""}
                         bl_ui_units_x={self.panel_width}
+                        {icon_line}
 
                         @classmethod
                         def poll(cls, context):
@@ -258,10 +348,17 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
             self.code_unregister = f"if '{parent}' in globals(): bpy.utils.unregister_class({self.last_idname})"
         else:
             if bpy.context.scene.sn.is_exporting:
-                self.code_register = f"bpy.utils.register_class({self.last_idname})"
+                if icon_register_lines:
+                    self.code_register = f"""
+                                        {self.indent(icon_register_lines, 10)}
+                                        bpy.utils.register_class({self.last_idname})
+                                        """
+                else:
+                    self.code_register = f"bpy.utils.register_class({self.last_idname})"
                 self.code_unregister = f"bpy.utils.unregister_class({self.last_idname})"
             else:
                 self.code_register = f"""
+                                    {self.indent(icon_register_lines, 9)}
                                     try: bpy.utils.register_class({self.last_idname})
                                     except: pass
                                     """
@@ -353,6 +450,36 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         if not self.shortcut_only:
             if not self.is_subpanel:
                 layout.prop(self, "category")
+                # tab icons only exist in Blender 5.2+
+                if bpy.app.version >= (5, 2, 0):
+                    row = layout.row(align=True)
+                    row.label(text="Icon:")
+                    row.prop(self, "panel_icon_source", text="", icon_only=True)
+                    if self.panel_icon_source == "BLENDER":
+                        icon_value = self.panel_icon
+                        op = row.operator(
+                            "sn.select_icon",
+                            text="" if icon_value else "Choose Icon",
+                            icon_value=icon_value,
+                        )
+                        op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
+                        op.prop_name = "panel_icon"
+                    else:
+                        row.alignment = 'EXPAND'
+                        row.scale_x = 2.0
+                        row.prop_search(
+                            self,
+                            "panel_icon_asset",
+                            context.scene.sn,
+                            "assets",
+                            text="",
+                            item_search_property="name",
+                        )
+                        asset_path = self._get_panel_icon_asset_path(context)
+                        if self.panel_icon_asset and not os.path.exists(
+                            bpy.path.abspath(asset_path)
+                        ):
+                            layout.label(text="Asset file not found!", icon="ERROR")
 
             layout.prop(self, "panel_order")
             layout.prop(self, "hide_header")
