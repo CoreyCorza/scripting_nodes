@@ -4,7 +4,62 @@ import os
 
 from ...interface.panels.graph_ui_list import get_selected_graph, get_selected_graph_offset
 from ...nodes.compiler import unregister_addon, compile_addon
+from ...utils import collection_has_item
 
+
+
+def append_missing_properties(context, path):
+    """Copy Serpens property definitions from another file into this scene.
+
+    Appended graphs reference addon properties by name, but property
+    definitions live on the source file's scenes, not on the node tree, so
+    they don't come along with the appended datablock. This temporarily links
+    the source scenes, copies any property definitions (and their categories)
+    that don't exist here yet, and unlinks everything again. Properties that
+    already exist by name are kept as they are so appended nodes bind to them.
+    """
+    sn = context.scene.sn
+    copied = []
+
+    prev_scenes = set(bpy.data.scenes.values())
+    prev_libraries = set(bpy.data.libraries.values())
+    try:
+        with bpy.data.libraries.load(path, link=True) as (data_from, data_to):
+            data_to.scenes = list(data_from.scenes)
+    except (OSError, RuntimeError) as error:
+        print(
+            "Serpens Warning: could not read properties from"
+            f" '{path}': {error}"
+        )
+        return copied
+
+    try:
+        for scene in bpy.data.scenes:
+            if scene in prev_scenes or not hasattr(scene, "sn"):
+                continue
+            for prop in scene.sn.properties:
+                if not prop.name or collection_has_item(sn.properties, prop.name):
+                    continue
+                if prop.category and not collection_has_item(
+                    sn.property_categories, prop.category
+                ):
+                    if prop.category != "OTHER":
+                        sn.property_categories.add().name = prop.category
+                new_prop = sn.properties.add()
+                prop.match_settings(new_prop)
+                new_prop.attach_to = prop.attach_to
+                copied.append(new_prop.name)
+    finally:
+        # remove everything the temporary link pulled in
+        for library in set(bpy.data.libraries.values()) - prev_libraries:
+            bpy.data.libraries.remove(library)
+        for scene in set(bpy.data.scenes.values()) - prev_scenes:
+            try:
+                bpy.data.scenes.remove(scene)
+            except RuntimeError:
+                pass
+
+    return copied
 
 
 def get_serpens_graphs():
@@ -145,12 +200,21 @@ class SN_OT_AppendPopup(bpy.types.Operator):
             with bpy.data.libraries.load(self.path) as (_, data_to):
                 data_to.node_groups = [self.graph]
             
+            # bring the property definitions the graph references with it
+            copied_props = append_missing_properties(context, self.path)
+            if copied_props:
+                self.report(
+                    {"INFO"},
+                    message=f"Appended {len(copied_props)} properties:"
+                    f" {', '.join(copied_props)}",
+                )
+
             # register new graph
             new_groups = set(prev_groups) ^ set(bpy.data.node_groups.values())
             for group in new_groups:
                 context.scene.sn.node_tree_index = bpy.data.node_groups.values().index(group)
             compile_addon()
-            
+
             # redraw screen
             context.area.tag_redraw()
         return {"FINISHED"}
