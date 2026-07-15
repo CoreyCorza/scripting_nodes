@@ -147,6 +147,29 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         update=SN_ScriptingBaseNode._evaluate,
     )
 
+    panel_icon_source: bpy.props.EnumProperty(
+        name="Tab Icon Source",
+        description="Use a builtin blender icon or a custom image for the sidebar tab",
+        items=[
+            ("BLENDER", "Blender", "Use a builtin blender icon", "BLENDER", 0),
+            ("CUSTOM", "Image", "Use a custom image", "IMAGE_DATA", 1),
+        ],
+        update=SN_ScriptingBaseNode._evaluate,
+    )
+
+    def update_panel_icon_file(self, context):
+        if self.panel_icon_file:
+            self.panel_icon_file.use_fake_user = True
+            self.panel_icon_file.preview_ensure()
+        self._evaluate(context)
+
+    panel_icon_file: bpy.props.PointerProperty(
+        type=bpy.types.Image,
+        name="Tab Icon Image",
+        description="The image shown on this panels sidebar tab",
+        update=update_panel_icon_file,
+    )
+
     expand_header: bpy.props.BoolProperty(
         default=False,
         name="Expand Header",
@@ -262,13 +285,28 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                 parent_node = self.ref_ntree.nodes[self.ref_SN_PanelNode]
                 parent = parent_node.last_idname
 
-        # bl_icon only exists in Blender 5.2+; guard it inside the class body
-        # so the compiled addon keeps working on older versions
+        # bl_icon and bl_icon_value only exist in Blender 5.2+; guard them so
+        # the compiled addon keeps working on older versions. Custom images
+        # assign bl_icon_value right before registration since class bodies
+        # run before the previews are loaded.
         icon_line = ""
-        if self.panel_icon_name:
-            icon_line = (
-                f"if bpy.app.version >= (5, 2, 0): bl_icon = '{self.panel_icon_name}'"
-            )
+        icon_register_lines = []
+        if not self.is_subpanel:
+            if self.panel_icon_source == "BLENDER":
+                if self.panel_icon_name:
+                    icon_line = f"if bpy.app.version >= (5, 2, 0): bl_icon = '{self.panel_icon_name}'"
+            elif self.panel_icon_file:
+                img_name = self.panel_icon_file.name
+                if context.scene.sn.is_exporting:
+                    self.code_import = "import os"
+                    icon_register_lines = [
+                        f"if bpy.app.version >= (5, 2, 0) and not '{img_name}' in _icons: _icons.load('{img_name}', os.path.join(os.path.dirname(__file__), 'icons', '{img_name}'), 'IMAGE')",
+                        f"if bpy.app.version >= (5, 2, 0) and '{img_name}' in _icons: {self.last_idname}.bl_icon_value = _icons['{img_name}'].icon_id",
+                    ]
+                else:
+                    icon_register_lines = [
+                        f"if bpy.app.version >= (5, 2, 0) and '{img_name}' in bpy.data.images: {self.last_idname}.bl_icon_value = bpy.data.images['{img_name}'].preview_ensure().icon_id",
+                    ]
 
         self.code = f"""
                     class {self.last_idname}(bpy.types.Panel):
@@ -307,10 +345,17 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
             self.code_unregister = f"if '{parent}' in globals(): bpy.utils.unregister_class({self.last_idname})"
         else:
             if bpy.context.scene.sn.is_exporting:
-                self.code_register = f"bpy.utils.register_class({self.last_idname})"
+                if icon_register_lines:
+                    self.code_register = f"""
+                                        {self.indent(icon_register_lines, 10)}
+                                        bpy.utils.register_class({self.last_idname})
+                                        """
+                else:
+                    self.code_register = f"bpy.utils.register_class({self.last_idname})"
                 self.code_unregister = f"bpy.utils.unregister_class({self.last_idname})"
             else:
                 self.code_register = f"""
+                                    {self.indent(icon_register_lines, 9)}
                                     try: bpy.utils.register_class({self.last_idname})
                                     except: pass
                                     """
@@ -405,14 +450,26 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                 row.prop(self, "category")
                 # tab icons only exist in Blender 5.2+
                 if bpy.app.version >= (5, 2, 0):
-                    icon_value = self.panel_icon
-                    op = row.operator(
-                        "sn.select_icon",
-                        text="" if icon_value else "Icon",
-                        icon_value=icon_value,
-                    )
-                    op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
-                    op.prop_name = "panel_icon"
+                    row.prop(self, "panel_icon_source", text="", icon_only=True)
+                    if self.panel_icon_source == "BLENDER":
+                        icon_value = self.panel_icon
+                        op = row.operator(
+                            "sn.select_icon",
+                            text="" if icon_value else "Icon",
+                            icon_value=icon_value,
+                        )
+                        op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
+                        op.prop_name = "panel_icon"
+                    else:
+                        layout.template_ID(
+                            self,
+                            "panel_icon_file",
+                            new="image.new",
+                            open="image.open",
+                            live_icon=True,
+                        )
+                        if self.panel_icon_file and not self.panel_icon_file.filepath:
+                            layout.label(text="Image not saved!", icon="ERROR")
 
             layout.prop(self, "panel_order")
             layout.prop(self, "hide_header")
