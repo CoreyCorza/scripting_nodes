@@ -107,26 +107,50 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         update=SN_ScriptingBaseNode._evaluate,
     )
 
+    def update_panel_icon(self, context):
+        """Resolve the picked icon value to its identifier right away.
+
+        Icon values shift between Blender versions when icons are added, so
+        only the identifier is a stable thing to store and compile.
+        """
+        name = ""
+        if self.panel_icon:
+            for icon in (
+                bpy.types.UILayout.bl_rna.functions["prop"]
+                .parameters["icon"]
+                .enum_items
+            ):
+                if icon.value == self.panel_icon:
+                    name = icon.identifier
+                    break
+        self.panel_icon_name = name
+        self._evaluate(context)
+
     panel_icon: bpy.props.IntProperty(
         default=0,
         min=0,
-        name="Header Icon",
-        description="Icon shown in this panels header (only displayed in Blender 5.2+)",
-        update=SN_ScriptingBaseNode._evaluate,
+        name="Tab Icon",
+        description="Icon shown on this panels sidebar tab (only displayed in Blender 5.2+)",
+        update=update_panel_icon,
     )
 
-    def _get_panel_icon_name(self):
-        """Return the identifier of the selected built-in icon or an empty string"""
-        if self.panel_icon:
+    panel_icon_name: bpy.props.StringProperty(
+        default="",
+        name="Tab Icon Name",
+        description="Identifier of the icon shown on this panels sidebar tab",
+    )
+
+    def _get_panel_icon_value(self):
+        """Return the display icon value for the stored icon identifier"""
+        if self.panel_icon_name:
             icons = (
                 bpy.types.UILayout.bl_rna.functions["prop"]
                 .parameters["icon"]
                 .enum_items
             )
-            for icon in icons:
-                if icon.value == self.panel_icon:
-                    return icon.identifier
-        return ""
+            if self.panel_icon_name in icons:
+                return icons[self.panel_icon_name].value
+        return 0
 
     expand_header: bpy.props.BoolProperty(
         default=False,
@@ -246,16 +270,10 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         # bl_icon only exists in Blender 5.2+; guard it inside the class body
         # so the compiled addon keeps working on older versions
         icon_line = ""
-        if self.panel_icon:
-            icon_name = self._get_panel_icon_name()
-            if icon_name:
-                icon_line = (
-                    f"if bpy.app.version >= (5, 2, 0): bl_icon = '{icon_name}'"
-                )
-            else:
-                icon_line = (
-                    f"if bpy.app.version >= (5, 2, 0): bl_icon_value = {self.panel_icon}"
-                )
+        if self.panel_icon_name:
+            icon_line = (
+                f"if bpy.app.version >= (5, 2, 0): bl_icon = '{self.panel_icon_name}'"
+            )
 
         self.code = f"""
                     class {self.last_idname}(bpy.types.Panel):
@@ -388,25 +406,24 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         layout.prop(self, "panel_label")
         if not self.shortcut_only:
             if not self.is_subpanel:
-                layout.prop(self, "category")
+                row = layout.row(align=True)
+                row.prop(self, "category")
+                op = row.operator(
+                    "sn.select_icon",
+                    text="",
+                    icon_value=self._get_panel_icon_value() or 101,
+                )
+                op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
+                op.prop_name = "panel_icon"
+                if self.panel_icon_name and bpy.app.version < (5, 2, 0):
+                    row = layout.row()
+                    row.enabled = False
+                    row.label(text="Tab icons show in Blender 5.2+", icon="INFO")
 
             layout.prop(self, "panel_order")
             layout.prop(self, "hide_header")
             layout.prop(self, "expand_header")
             layout.prop(self, "default_closed")
-
-            if not self.hide_header:
-                op = layout.operator(
-                    "sn.select_icon",
-                    text="Header Icon" if not self.panel_icon else "",
-                    icon_value=self.panel_icon,
-                )
-                op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
-                op.prop_name = "panel_icon"
-                if self.panel_icon and bpy.app.version < (5, 2, 0):
-                    row = layout.row()
-                    row.enabled = False
-                    row.label(text="Header icons show in Blender 5.2+", icon="INFO")
         layout.prop(self, "shortcut_only")
 
     def draw_node_panel(self, context, layout):
