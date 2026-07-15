@@ -449,22 +449,23 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         layout.prop(self, "panel_label")
         if not self.shortcut_only:
             if not self.is_subpanel:
-                row = layout.row(align=True)
-                row.prop(self, "category")
+                layout.prop(self, "category")
                 # tab icons only exist in Blender 5.2+
                 if bpy.app.version >= (5, 2, 0):
+                    row = layout.row(align=True)
+                    row.label(text="Icon:")
                     row.prop(self, "panel_icon_source", text="", icon_only=True)
                     if self.panel_icon_source == "BLENDER":
                         icon_value = self.panel_icon
                         op = row.operator(
                             "sn.select_icon",
-                            text="" if icon_value else "Icon",
+                            text="" if icon_value else "Choose Icon",
                             icon_value=icon_value,
                         )
                         op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
                         op.prop_name = "panel_icon"
                     else:
-                        layout.prop_search(
+                        row.prop_search(
                             self,
                             "panel_icon_asset",
                             context.scene.sn,
