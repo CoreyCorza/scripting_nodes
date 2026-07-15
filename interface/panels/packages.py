@@ -54,14 +54,12 @@ class SN_PT_SnippetsPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         row = layout.row()
-        row.scale_y = 1.1
         row.operator(
             "sn.open_preferences", text="Get Snippets", icon="URL"
         ).navigation = "MARKET"
 
         node = context.space_data.node_tree.nodes.active
         row = layout.row()
-        row.scale_y = 1.1
         if (
             node
             and node.select
@@ -94,13 +92,14 @@ class SN_PT_SnippetsPanel(bpy.types.Panel):
         layout.separator()
 
         row = layout.row()
-        row.scale_y = 1.1
         row.operator("sn.install_snippet", text="Install Snippets", icon="FILE_FOLDER")
 
         snippet_count = len(snippet_ops.loaded_snippets)
+        snippet_list = layout.column(align=True)
         for i, snippet in enumerate(snippet_ops.loaded_snippets):
-            box = layout.box()
+            box = snippet_list.box()
             row = box.row()
+            row.scale_y = 0.8
             cat = None
             if type(snippet) == str:
                 row.label(text=snippet.split(".")[0])
@@ -139,6 +138,7 @@ class SN_PT_SnippetsPanel(bpy.types.Panel):
 
             if cat and cat.expand:
                 row = box.row()
+                row.scale_y = 0.8
                 split = row.split(factor=0.1)
                 split.label(text="")
                 col = split.column(align=True)
