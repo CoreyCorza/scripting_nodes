@@ -5,6 +5,7 @@ import os
 from ...interface.panels.graph_ui_list import get_selected_graph, get_selected_graph_offset
 from ...nodes.compiler import unregister_addon, compile_addon
 from ...utils import collection_has_item
+from .node_tree import ScriptingNodesTree
 
 
 
@@ -96,6 +97,10 @@ def get_serpens_graphs_in_file(path):
             if group not in prev_groups and group.bl_idname == "ScriptingNodesTree":
                 graphs.append(group.name)
     finally:
+        # drop any cached link data for the trees that are about to go away
+        # so a later tree at a recycled id can't pick up dangling sockets
+        for group in set(bpy.data.node_groups.values()) - prev_groups:
+            ScriptingNodesTree.link_cache.pop(id(group), None)
         _remove_temporarily_linked_ids(bpy.data.libraries, prev_libraries)
         _remove_temporarily_linked_ids(bpy.data.node_groups, prev_groups)
 
