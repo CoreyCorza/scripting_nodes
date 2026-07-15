@@ -70,19 +70,6 @@ class SN_OT_ExportAddon(bpy.types.Operator, ExportHelper):
                                 raise FileNotFoundError(
                                     f"Could not find the icon file at {icon_path}"
                                 )
-                    elif node.bl_idname == "SN_PanelNode":
-                        # panel tab icons load from icons/<image name> at register
-                        if node.panel_icon_source == "CUSTOM" and node.panel_icon_file:
-                            img_path = bpy.path.abspath(node.panel_icon_file.filepath)
-                            if os.path.exists(img_path):
-                                filepath = os.path.join(
-                                    icon_path, node.panel_icon_file.name
-                                )
-                                shutil.copy(img_path, filepath)
-                            else:
-                                raise FileNotFoundError(
-                                    f"Could not find the icon file at {img_path}"
-                                )
 
     def add_code(self, path):
         """Creates the index file"""

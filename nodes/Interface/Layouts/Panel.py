@@ -1,4 +1,5 @@
 import bpy
+import os
 from ...base_node import SN_ScriptingBaseNode
 from ....utils import get_python_name
 
@@ -149,26 +150,27 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
 
     panel_icon_source: bpy.props.EnumProperty(
         name="Tab Icon Source",
-        description="Use a builtin blender icon or a custom image for the sidebar tab",
+        description="Use a builtin blender icon or a custom image asset for the sidebar tab",
         items=[
             ("BLENDER", "Blender", "Use a builtin blender icon", "BLENDER", 0),
-            ("CUSTOM", "Image", "Use a custom image", "IMAGE_DATA", 1),
+            ("CUSTOM", "Asset", "Use an image asset", "ASSET_MANAGER", 1),
         ],
         update=SN_ScriptingBaseNode._evaluate,
     )
 
-    def update_panel_icon_file(self, context):
-        if self.panel_icon_file:
-            self.panel_icon_file.use_fake_user = True
-            self.panel_icon_file.preview_ensure()
-        self._evaluate(context)
-
-    panel_icon_file: bpy.props.PointerProperty(
-        type=bpy.types.Image,
-        name="Tab Icon Image",
-        description="The image shown on this panels sidebar tab",
-        update=update_panel_icon_file,
+    panel_icon_asset: bpy.props.StringProperty(
+        name="Tab Icon Asset",
+        description="The image asset shown on this panels sidebar tab",
+        update=SN_ScriptingBaseNode._evaluate,
     )
+
+    def _get_panel_icon_asset_path(self, context):
+        """Return the selected icon asset's path or an empty string"""
+        if self.panel_icon_asset:
+            for asset in context.scene.sn.assets:
+                if asset.name == self.panel_icon_asset:
+                    return asset.path
+        return ""
 
     expand_header: bpy.props.BoolProperty(
         default=False,
@@ -295,17 +297,18 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
             if self.panel_icon_source == "BLENDER":
                 if self.panel_icon_name:
                     icon_line = f"if bpy.app.version >= (5, 2, 0): bl_icon = '{self.panel_icon_name}'"
-            elif self.panel_icon_file:
-                img_name = self.panel_icon_file.name
-                if context.scene.sn.is_exporting:
+            else:
+                asset_path = self._get_panel_icon_asset_path(context)
+                if asset_path:
+                    # exported addons ship their assets in the assets folder
+                    if context.scene.sn.is_exporting:
+                        path_expr = f"os.path.join(os.path.dirname(__file__), 'assets', '{os.path.basename(asset_path)}')"
+                    else:
+                        path_expr = f"r'{asset_path}'"
                     self.code_import = "import os"
                     icon_register_lines = [
-                        f"if bpy.app.version >= (5, 2, 0) and not '{img_name}' in _icons: _icons.load('{img_name}', os.path.join(os.path.dirname(__file__), 'icons', '{img_name}'), 'IMAGE')",
-                        f"if bpy.app.version >= (5, 2, 0) and '{img_name}' in _icons: {self.last_idname}.bl_icon_value = _icons['{img_name}'].icon_id",
-                    ]
-                else:
-                    icon_register_lines = [
-                        f"if bpy.app.version >= (5, 2, 0) and '{img_name}' in bpy.data.images: {self.last_idname}.bl_icon_value = bpy.data.images['{img_name}'].preview_ensure().icon_id",
+                        f"if bpy.app.version >= (5, 2, 0) and os.path.exists({path_expr}) and not {path_expr} in _icons: _icons.load({path_expr}, {path_expr}, 'IMAGE')",
+                        f"if bpy.app.version >= (5, 2, 0) and {path_expr} in _icons: {self.last_idname}.bl_icon_value = _icons[{path_expr}].icon_id",
                     ]
 
         self.code = f"""
@@ -461,15 +464,19 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
                         op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
                         op.prop_name = "panel_icon"
                     else:
-                        layout.template_ID(
+                        layout.prop_search(
                             self,
-                            "panel_icon_file",
-                            new="image.new",
-                            open="image.open",
-                            live_icon=True,
+                            "panel_icon_asset",
+                            context.scene.sn,
+                            "assets",
+                            text="",
+                            item_search_property="name",
                         )
-                        if self.panel_icon_file and not self.panel_icon_file.filepath:
-                            layout.label(text="Image not saved!", icon="ERROR")
+                        asset_path = self._get_panel_icon_asset_path(context)
+                        if self.panel_icon_asset and not os.path.exists(
+                            bpy.path.abspath(asset_path)
+                        ):
+                            layout.label(text="Asset file not found!", icon="ERROR")
 
             layout.prop(self, "panel_order")
             layout.prop(self, "hide_header")
