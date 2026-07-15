@@ -233,8 +233,35 @@ class SN_OT_AppendPopup(bpy.types.Operator):
                                    items=get_graph_items,
                                    options={"HIDDEN", "SKIP_SAVE"})
 
+    def _get_open_editor_trees(self, context):
+        """Collect the tree currently shown in each Serpens node editor"""
+        open_trees = []
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type != "NODE_EDITOR":
+                    continue
+                for space in area.spaces:
+                    if (
+                        space.type == "NODE_EDITOR"
+                        and getattr(space, "tree_type", None) == "ScriptingNodesTree"
+                    ):
+                        open_trees.append((space, space.node_tree))
+        return open_trees
+
+    def _restore_open_editor_trees(self, open_trees):
+        """Reactivate the trees the user had open before the append"""
+        for space, tree in open_trees:
+            try:
+                if tree and space.node_tree != tree:
+                    space.node_tree = tree
+            except (ReferenceError, RuntimeError):
+                pass
+
     def execute(self, context):
         if self.graph != "NONE":
+            # remember which trees are open so the append can't blank them
+            open_editor_trees = self._get_open_editor_trees(context)
+
             # save previous groups
             prev_groups = bpy.data.node_groups.values()
 
@@ -256,6 +283,9 @@ class SN_OT_AppendPopup(bpy.types.Operator):
             for group in new_groups:
                 context.scene.sn.node_tree_index = bpy.data.node_groups.values().index(group)
             compile_addon()
+
+            # bring back the trees the user had open in the node editors
+            self._restore_open_editor_trees(open_editor_trees)
 
             # redraw screen
             context.area.tag_redraw()
