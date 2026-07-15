@@ -107,50 +107,45 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
         update=SN_ScriptingBaseNode._evaluate,
     )
 
-    def update_panel_icon(self, context):
-        """Resolve the picked icon value to its identifier right away.
-
-        Icon values shift between Blender versions when icons are added, so
-        only the identifier is a stable thing to store and compile.
-        """
-        name = ""
-        if self.panel_icon:
-            for icon in (
-                bpy.types.UILayout.bl_rna.functions["prop"]
-                .parameters["icon"]
-                .enum_items
-            ):
-                if icon.value == self.panel_icon:
-                    name = icon.identifier
-                    break
-        self.panel_icon_name = name
-        self._evaluate(context)
-
-    panel_icon: bpy.props.IntProperty(
-        default=0,
-        min=0,
-        name="Tab Icon",
-        description="Icon shown on this panels sidebar tab (only displayed in Blender 5.2+)",
-        update=update_panel_icon,
-    )
-
+    # Only the icon identifier is stored since icon values shift between
+    # Blender versions when icons are added. The int property below is just a
+    # computed view over it so the icon gallery picker can read and write it.
     panel_icon_name: bpy.props.StringProperty(
         default="MONKEY",
         name="Tab Icon Name",
         description="Identifier of the icon shown on this panels sidebar tab",
     )
 
-    def _get_panel_icon_value(self):
-        """Return the display icon value for the stored icon identifier"""
+    def _icon_enum_items(self):
+        return (
+            bpy.types.UILayout.bl_rna.functions["prop"]
+            .parameters["icon"]
+            .enum_items
+        )
+
+    def _get_panel_icon(self):
         if self.panel_icon_name:
-            icons = (
-                bpy.types.UILayout.bl_rna.functions["prop"]
-                .parameters["icon"]
-                .enum_items
-            )
-            if self.panel_icon_name in icons:
-                return icons[self.panel_icon_name].value
+            for icon in self._icon_enum_items():
+                if icon.identifier == self.panel_icon_name:
+                    return icon.value
         return 0
+
+    def _set_panel_icon(self, value):
+        name = ""
+        if value:
+            for icon in self._icon_enum_items():
+                if icon.value == value:
+                    name = icon.identifier
+                    break
+        self.panel_icon_name = name
+
+    panel_icon: bpy.props.IntProperty(
+        name="Tab Icon",
+        description="Icon shown on this panels sidebar tab (only displayed in Blender 5.2+)",
+        get=_get_panel_icon,
+        set=_set_panel_icon,
+        update=SN_ScriptingBaseNode._evaluate,
+    )
 
     expand_header: bpy.props.BoolProperty(
         default=False,
@@ -408,10 +403,11 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
             if not self.is_subpanel:
                 row = layout.row(align=True)
                 row.prop(self, "category")
+                icon_value = self.panel_icon
                 op = row.operator(
                     "sn.select_icon",
-                    text="",
-                    icon_value=self._get_panel_icon_value() or 101,
+                    text="" if icon_value else "Icon",
+                    icon_value=icon_value,
                 )
                 op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
                 op.prop_name = "panel_icon"
