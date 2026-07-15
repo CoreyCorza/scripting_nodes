@@ -135,7 +135,7 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
     )
 
     panel_icon_name: bpy.props.StringProperty(
-        default="",
+        default="MONKEY",
         name="Tab Icon Name",
         description="Identifier of the icon shown on this panels sidebar tab",
     )
