@@ -97,14 +97,13 @@ class SN_PT_SnippetsPanel(bpy.types.Panel):
         row.scale_y = 1.1
         row.operator("sn.install_snippet", text="Install Snippets", icon="FILE_FOLDER")
 
+        snippet_count = len(snippet_ops.loaded_snippets)
         for i, snippet in enumerate(snippet_ops.loaded_snippets):
             box = layout.box()
             row = box.row()
+            cat = None
             if type(snippet) == str:
                 row.label(text=snippet.split(".")[0])
-                row.operator(
-                    "sn.uninstall_snippet", text="", icon="PANEL_CLOSE", emboss=False
-                ).index = i
             else:
                 cat = context.scene.sn.snippet_categories.get(snippet["name"])
                 row.prop(
@@ -117,17 +116,35 @@ class SN_PT_SnippetsPanel(bpy.types.Panel):
                     ),
                 )
                 row.label(text=snippet["name"])
-                row.operator(
-                    "sn.uninstall_snippet", text="", icon="PANEL_CLOSE", emboss=False
-                ).index = i
-                if cat.expand:
-                    row = box.row()
-                    split = row.split(factor=0.1)
-                    split.label(text="")
-                    col = split.column(align=True)
-                    col.enabled = False
-                    for name in snippet["snippets"]:
-                        col.label(text=name.split(".")[0])
+
+            # reorder controls; zip categories move with their sub snippets
+            move_row = row.row(align=True)
+            move_row.enabled = i > 0
+            op = move_row.operator(
+                "sn.move_snippet", text="", icon="TRIA_UP", emboss=False
+            )
+            op.index = i
+            op.move_up = True
+            move_row = row.row(align=True)
+            move_row.enabled = i < snippet_count - 1
+            op = move_row.operator(
+                "sn.move_snippet", text="", icon="TRIA_DOWN", emboss=False
+            )
+            op.index = i
+            op.move_up = False
+
+            row.operator(
+                "sn.uninstall_snippet", text="", icon="PANEL_CLOSE", emboss=False
+            ).index = i
+
+            if cat and cat.expand:
+                row = box.row()
+                split = row.split(factor=0.1)
+                split.label(text="")
+                col = split.column(align=True)
+                col.enabled = False
+                for name in snippet["snippets"]:
+                    col.label(text=name.split(".")[0])
 
         if not snippet_ops.loaded_snippets:
             box = layout.box()

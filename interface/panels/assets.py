@@ -33,6 +33,9 @@ class SN_PT_AssetsPanel(bpy.types.Panel):
         col.operator("sn.add_asset", text="", icon="ADD")
         col.operator("sn.find_asset", text="", icon="VIEWZOOM")
         col.operator("sn.remove_asset", text="", icon="REMOVE")
+        col.separator()
+        col.operator("sn.move_asset", text="", icon="TRIA_UP").move_up = True
+        col.operator("sn.move_asset", text="", icon="TRIA_DOWN").move_up = False
 
         # draw asset settings
         if sn.asset_index < len(sn.assets):

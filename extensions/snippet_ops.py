@@ -126,6 +126,36 @@ class SN_OT_UninstallSnippet(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class SN_OT_MoveSnippet(bpy.types.Operator):
+    bl_idname = "sn.move_snippet"
+    bl_label = "Move Snippet"
+    bl_description = "Moves this snippet in the list"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    index: bpy.props.IntProperty(options={"SKIP_SAVE", "HIDDEN"})
+    move_up: bpy.props.BoolProperty(options={"SKIP_SAVE", "HIDDEN"})
+
+    def execute(self, context):
+        path = os.path.join(os.path.dirname(__file__), "installed.json")
+        if not os.path.exists(path):
+            return {"CANCELLED"}
+        with open(path, "r+") as data_file:
+            data = json.loads(data_file.read())
+            new_index = self.index + (-1 if self.move_up else 1)
+            if (
+                0 <= self.index < len(data["snippets"])
+                and 0 <= new_index < len(data["snippets"])
+            ):
+                data["snippets"].insert(
+                    new_index, data["snippets"].pop(self.index)
+                )
+                data_file.seek(0)
+                data_file.write(json.dumps(data, indent=4))
+                data_file.truncate()
+                load_snippets()
+        return {"FINISHED"}
+
+
 class SN_OT_AddSnippet(bpy.types.Operator):
     bl_idname = "sn.add_snippet"
     bl_label = "Add Snippet"

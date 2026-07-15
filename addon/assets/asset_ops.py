@@ -85,6 +85,28 @@ class SN_OT_RemoveAsset(bpy.types.Operator):
     
     
     
+class SN_OT_MoveAsset(bpy.types.Operator):
+    bl_idname = "sn.move_asset"
+    bl_label = "Move Asset"
+    bl_description = "Moves this asset in the list"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    move_up: bpy.props.BoolProperty(options={"SKIP_SAVE", "HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.sn.asset_index < len(context.scene.sn.assets)
+
+    def execute(self, context):
+        sn = context.scene.sn
+        new_index = sn.asset_index + (-1 if self.move_up else 1)
+        if 0 <= new_index < len(sn.assets):
+            sn.assets.move(sn.asset_index, new_index)
+            sn.asset_index = new_index
+        return {"FINISHED"}
+
+
+
 class SN_OT_FindNode(bpy.types.Operator):
     bl_idname = "sn.find_node"
     bl_label = "Find Node"
