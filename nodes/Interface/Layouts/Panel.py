@@ -403,18 +403,16 @@ class SN_PanelNode(SN_ScriptingBaseNode, bpy.types.Node):
             if not self.is_subpanel:
                 row = layout.row(align=True)
                 row.prop(self, "category")
-                icon_value = self.panel_icon
-                op = row.operator(
-                    "sn.select_icon",
-                    text="" if icon_value else "Icon",
-                    icon_value=icon_value,
-                )
-                op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
-                op.prop_name = "panel_icon"
-                if self.panel_icon_name and bpy.app.version < (5, 2, 0):
-                    row = layout.row()
-                    row.enabled = False
-                    row.label(text="Tab icons show in Blender 5.2+", icon="INFO")
+                # tab icons only exist in Blender 5.2+
+                if bpy.app.version >= (5, 2, 0):
+                    icon_value = self.panel_icon
+                    op = row.operator(
+                        "sn.select_icon",
+                        text="" if icon_value else "Icon",
+                        icon_value=icon_value,
+                    )
+                    op.icon_data_path = f"bpy.data.node_groups['{self.node_tree.name}'].nodes['{self.name}']"
+                    op.prop_name = "panel_icon"
 
             layout.prop(self, "panel_order")
             layout.prop(self, "hide_header")
