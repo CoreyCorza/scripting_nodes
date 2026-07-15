@@ -85,6 +85,102 @@ class SN_OT_RemoveAsset(bpy.types.Operator):
     
     
     
+class SN_OT_FindMissingAssets(bpy.types.Operator):
+    bl_idname = "sn.find_missing_assets"
+    bl_label = "Find Missing Assets"
+    bl_description = "Try to find missing asset files below the selected directory and update their paths"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    directory: bpy.props.StringProperty(
+        subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"}
+    )
+    filter_folder: bpy.props.BoolProperty(
+        default=True, options={"HIDDEN", "SKIP_SAVE"}
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.scene.sn.assets)
+
+    def execute(self, context):
+        sn = context.scene.sn
+        missing = [
+            asset
+            for asset in sn.assets
+            if asset.path and not os.path.exists(bpy.path.abspath(asset.path))
+        ]
+        if not missing:
+            self.report({"INFO"}, message="No missing assets found")
+            return {"FINISHED"}
+
+        # index the search directory once; os.walk is top down, so the
+        # shallowest occurrence of a name wins when there are duplicates
+        found_files = {}
+        found_dirs = {}
+        search_root = os.path.normpath(bpy.path.abspath(self.directory))
+        found_dirs.setdefault(
+            os.path.basename(search_root).lower(), search_root
+        )
+        for root, dirs, files in os.walk(search_root):
+            for name in files:
+                found_files.setdefault(name.lower(), os.path.join(root, name))
+            for name in dirs:
+                found_dirs.setdefault(name.lower(), os.path.join(root, name))
+
+        updated = 0
+        still_missing = []
+        for asset in missing:
+            old_path = os.path.normpath(bpy.path.abspath(asset.path))
+            basename = os.path.basename(old_path).lower()
+            # file assets usually have an extension, directory assets don't
+            if os.path.splitext(old_path)[1]:
+                new_path = found_files.get(basename) or found_dirs.get(basename)
+            else:
+                new_path = found_dirs.get(basename) or found_files.get(basename)
+            if new_path:
+                asset.path = new_path
+                updated += 1
+            else:
+                still_missing.append(asset.name)
+
+        if still_missing:
+            self.report(
+                {"WARNING"},
+                message=f"Updated {updated} asset paths, still missing:"
+                f" {', '.join(still_missing)}",
+            )
+        else:
+            self.report({"INFO"}, message=f"Updated {updated} asset paths")
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+
+
+class SN_OT_MoveAsset(bpy.types.Operator):
+    bl_idname = "sn.move_asset"
+    bl_label = "Move Asset"
+    bl_description = "Moves this asset in the list"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    move_up: bpy.props.BoolProperty(options={"SKIP_SAVE", "HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.sn.asset_index < len(context.scene.sn.assets)
+
+    def execute(self, context):
+        sn = context.scene.sn
+        new_index = sn.asset_index + (-1 if self.move_up else 1)
+        if 0 <= new_index < len(sn.assets):
+            sn.assets.move(sn.asset_index, new_index)
+            sn.asset_index = new_index
+        return {"FINISHED"}
+
+
+
 class SN_OT_FindNode(bpy.types.Operator):
     bl_idname = "sn.find_node"
     bl_label = "Find Node"
