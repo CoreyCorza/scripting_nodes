@@ -333,7 +333,7 @@ class ScriptingNodesTree(bpy.types.NodeTree):
         # topology caches are not safe to touch, and running it there would
         # fill link_cache with socket references that dangle once temporarily
         # linked trees are removed again.
-        if self.library:
+        if getattr(self, "library", None):
             return
         # update tree links
         self._update_tree_links()
