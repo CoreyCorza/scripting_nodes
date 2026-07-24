@@ -33,12 +33,25 @@ class SN_AddToMenuNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
     def evaluate(self, context):
         uid = self.uuid
         func_name = f"sna_add_to_{self.menu_parent.lower()}_{uid}"
+        register_func_name = f"sna_register_add_to_menu_{uid}"
+        append_mode = self.append.lower()
 
         self.code = f"""
             def {func_name}(self, context):
                 if not ({self.inputs["Hide"].python_value}):
                     layout = self.layout
                     {self.indent([out.python_value if out.name == 'Menu' else '' for out in self.outputs], 5)}
+
+
+            def {register_func_name}():
+                menu_type = getattr(bpy.types, "{self.menu_parent}", None)
+                if menu_type is not None:
+                    try:
+                        menu_type.remove({func_name})
+                    except Exception:
+                        pass
+                    menu_type.{append_mode}({func_name})
+                return None
         """
         
         if self.menu_parent == "WM_MT_button_context":
@@ -50,12 +63,28 @@ class SN_AddToMenuNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
                         pass
             """
 
+        if context.scene.sn.is_exporting:
+            register_code = f"bpy.types.{self.menu_parent}.{append_mode}({func_name})"
+            unregister_code = f"bpy.types.{self.menu_parent}.remove({func_name})"
+        else:
+            register_code = (
+                f"bpy.app.timers.register({register_func_name}, first_interval=0.01)"
+            )
+            unregister_code = f"""
+                try: bpy.app.timers.unregister({register_func_name})
+                except Exception: pass
+                menu_type = getattr(bpy.types, "{self.menu_parent}", None)
+                if menu_type is not None:
+                    try: menu_type.remove({func_name})
+                    except Exception: pass
+            """
+
         self.code_register = f"""
             {"if getattr(bpy.types, 'WM_MT_button_context', None) == None: bpy.utils.register_class(WM_MT_button_context)" if self.menu_parent == "WM_MT_button_context" else ""}
-            bpy.types.{self.menu_parent}.{self.append.lower()}({func_name})
+            {register_code}
         """
         self.code_unregister = f"""
-            bpy.types.{self.menu_parent}.remove({func_name})
+            {unregister_code}
         """
 
 
