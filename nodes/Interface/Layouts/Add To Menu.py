@@ -34,6 +34,7 @@ class SN_AddToMenuNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
         uid = self.uuid
         func_name = f"sna_add_to_{self.menu_parent.lower()}_{uid}"
         register_func_name = f"sna_register_add_to_menu_{uid}"
+        unregister_func_name = f"sna_unregister_add_to_menu_{uid}"
         append_mode = self.append.lower()
 
         self.code = f"""
@@ -52,6 +53,16 @@ class SN_AddToMenuNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
                         pass
                     menu_type.{append_mode}({func_name})
                 return None
+
+
+            def {unregister_func_name}():
+                menu_type = getattr(bpy.types, "{self.menu_parent}", None)
+                if menu_type is not None:
+                    try:
+                        menu_type.remove({func_name})
+                    except Exception:
+                        pass
+                return None
         """
         
         if self.menu_parent == "WM_MT_button_context":
@@ -68,15 +79,14 @@ class SN_AddToMenuNodeNew(SN_ScriptingBaseNode, bpy.types.Node):
             unregister_code = f"bpy.types.{self.menu_parent}.remove({func_name})"
         else:
             register_code = (
-                f"bpy.app.timers.register({register_func_name}, first_interval=0.01)"
+                f"bpy.app.timers.register({register_func_name}, first_interval=0.25)"
             )
             unregister_code = f"""
                 try: bpy.app.timers.unregister({register_func_name})
                 except Exception: pass
-                menu_type = getattr(bpy.types, "{self.menu_parent}", None)
-                if menu_type is not None:
-                    try: menu_type.remove({func_name})
-                    except Exception: pass
+                try: bpy.app.timers.unregister({unregister_func_name})
+                except Exception: pass
+                bpy.app.timers.register({unregister_func_name}, first_interval=0.25)
             """
 
         self.code_register = f"""
