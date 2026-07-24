@@ -196,6 +196,10 @@ def format_single_file():
     # add node code
     postprops = ""
     for node in get_trigger_nodes():
+        include_lifecycle_code = not (
+            not sn.is_exporting
+            and node.bl_idname in {"SN_AddToMenuNodeNew", "SN_AddToMenuNode"}
+        )
         if node.code_import and not node.code_import in imports:
             imports += "\n" + node.code_import
         if node.code_imperative and not node.code_imperative in imperative:
@@ -204,9 +208,9 @@ def format_single_file():
             main += "\n" + node.code
         if node.code and node.bl_idname == "SN_PreferencesNode":
             postprops += "\n" + node.code
-        if node.code_register:
+        if include_lifecycle_code and node.code_register:
             register += "\n" + node.code_register
-        if node.code_unregister:
+        if include_lifecycle_code and node.code_unregister:
             unregister += "\n" + node.code_unregister
     t5 = time.time()
 
