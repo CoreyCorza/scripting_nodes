@@ -14,10 +14,26 @@ from ..addon.variables.compiler_variables import (
 )
 
 
+def _remove_stale_add_to_menu_callbacks():
+    """Remove generated Add To Menu callbacks before Blender redraws stale UI handlers."""
+    for type_name in dir(bpy.types):
+        ui_type = getattr(bpy.types, type_name, None)
+        callbacks = getattr(ui_type, "_dyn_ui_callbacks", None)
+        if callbacks is None:
+            continue
+        for callback in list(callbacks):
+            if getattr(callback, "__name__", "").startswith("sna_add_to_"):
+                try:
+                    ui_type.remove(callback)
+                except Exception:
+                    pass
+
+
 def unregister_addon():
     """Unregisters this addon"""
     sn = bpy.context.scene.sn
     t1 = time.time()
+    _remove_stale_add_to_menu_callbacks()
     # if sn.addon_unregister:
     #     try:
     #         sn.addon_unregister[0]()
