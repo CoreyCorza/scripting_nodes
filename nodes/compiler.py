@@ -131,11 +131,38 @@ _icons = bpy.utils.previews.new()
 """
 
 UNREGISTER = """
+"""
+
+UNREGISTER_KEYMAPS = """
 wm = bpy.context.window_manager
 kc = wm.keyconfigs.addon
-for km, kmi in addon_keymaps.values():
-    km.keymap_items.remove(kmi)
+if kc is not None:
+    for km, kmi in list(addon_keymaps.values()):
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
 addon_keymaps.clear()
+"""
+
+UNREGISTER_KEYMAPS_DEFERRED = """
+def sna_unregister_keymaps():
+    wm = bpy.context.window_manager
+    kc = wm.keyconfigs.addon
+    if kc is not None:
+        for km, kmi in list(addon_keymaps.values()):
+            try:
+                km.keymap_items.remove(kmi)
+            except Exception:
+                pass
+    addon_keymaps.clear()
+    return None
+
+try:
+    bpy.app.timers.unregister(sna_unregister_keymaps)
+except Exception:
+    pass
+bpy.app.timers.register(sna_unregister_keymaps, first_interval=0.25)
 """
 
 UNREGISTER_PREVIEWS = """
@@ -194,6 +221,9 @@ def format_single_file():
             "\n\nimport sys\nbpy.context.scene.sn.module_store.append([globals()])\n"
         )
         unregister += "\n\nbpy.context.scene.sn.module_store.clear()\n"
+        unregister += "\n" + UNREGISTER_KEYMAPS_DEFERRED
+    else:
+        unregister += "\n" + UNREGISTER_KEYMAPS
     unregister += "\n" + UNREGISTER_PREVIEWS
 
     # format register functions
@@ -446,6 +476,8 @@ def format_multifile_init(node_register, node_unregister):
         property_unregister_code()
         + "\n"
         + node_unregister
+        + "\n"
+        + UNREGISTER_KEYMAPS
         + "\n"
         + UNREGISTER_PREVIEWS
         + "\n"
