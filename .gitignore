@@ -8,3 +8,5 @@ installed.json
 extensions/snippets/*
 !extensions/snippets/__init__.py
 blender_scripting_nodes*
+nodes/Corza/
+nodes/Program Extras/
