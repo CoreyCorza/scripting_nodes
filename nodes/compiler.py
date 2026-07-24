@@ -131,14 +131,18 @@ _icons = bpy.utils.previews.new()
 """
 
 UNREGISTER = """
-global _icons
-bpy.utils.previews.remove(_icons)
-
 wm = bpy.context.window_manager
 kc = wm.keyconfigs.addon
 for km, kmi in addon_keymaps.values():
     km.keymap_items.remove(kmi)
 addon_keymaps.clear()
+"""
+
+UNREGISTER_PREVIEWS = """
+global _icons
+if _icons is not None:
+    bpy.utils.previews.remove(_icons)
+    _icons = None
 """
 
 
@@ -190,6 +194,7 @@ def format_single_file():
             "\n\nimport sys\nbpy.context.scene.sn.module_store.append([globals()])\n"
         )
         unregister += "\n\nbpy.context.scene.sn.module_store.clear()\n"
+    unregister += "\n" + UNREGISTER_PREVIEWS
 
     # format register functions
     if not register.strip():
@@ -437,7 +442,14 @@ def format_multifile_init(node_register, node_unregister):
     main += "\n" + property_imperative_code() + "\n"
 
     register += property_register_code() + "\n" + node_register + "\n"
-    unregister += property_unregister_code() + "\n" + node_unregister + "\n"
+    unregister += (
+        property_unregister_code()
+        + "\n"
+        + node_unregister
+        + "\n"
+        + UNREGISTER_PREVIEWS
+        + "\n"
+    )
 
     register = "def register():\n" + indent_code(register, 1, 0)
     unregister = "def unregister():\n" + indent_code(unregister, 1, 0)
